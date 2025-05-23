@@ -15,10 +15,10 @@ import (
 func main() {
 	ctx := context.Background()
 	config := &builder.TraceConnector{
-		Endpoint:            "otlp.hinha.web.id",
+		Endpoint:            "localhost:4318",
 		Insecure:            false,
 		Debug:               false,
-		Headers:             map[string]string{"Authorization": "$2a$04$MslvP7qnyS8DThjgAYoexOs8.SP5/9TJ19ywVCk.1sXHjJUajEmG."},
+		Headers:             map[string]string{},
 		URLPath:             "/v1/traces",
 		HTTPTLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		//EndpointURL: "",
