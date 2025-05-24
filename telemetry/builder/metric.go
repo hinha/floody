@@ -5,160 +5,183 @@ import (
 	"errors"
 	"github.com/hinha/floody/log"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.uber.org/zap"
+	"io"
 	"time"
 )
 
-const (
-	defaultRetryAttempts = 3
-	defaultRetryDelay    = time.Second * 2
-)
-
+// CloseFunc is a function that closes the provider
 type CloseFunc func(ctx context.Context) error
 
-type Meter struct {
+// MeterConfig holds the configuration for the meter
+type MeterConfig struct {
 	log            *zap.Logger
+	name           string
+	tag            string
 	resource       *resource.Resource
 	exemplarFilter exemplar.Filter
-	reader         *sdkmetric.PeriodicReader // only read property
-
-	ReaderInterval  time.Duration
-	ShutdownTimeout time.Duration
+	attributes     []attribute.KeyValue
 }
 
-type MeterProviderBuilder struct {
-	Meter
-
-	options  []sdkmetric.Option
-	exporter sdkmetric.Exporter
+// MeterBuilder implements the builder pattern for creating a meter provider
+type MeterBuilder struct {
+	config  MeterConfig
+	client  *MeterConnector
+	options []sdkmetric.Option
 }
 
-func NewMeterProvider(meter Meter, options ...MeterOption) *MeterProviderBuilder {
-	for _, o := range options {
-		o.apply(meter)
-	}
-	return &MeterProviderBuilder{
-		Meter: meter,
+// NewMeterProvider creates a new MeterBuilder instance
+func NewMeterProvider() *MeterBuilder {
+	return &MeterBuilder{
+		config: MeterConfig{
+			log: log.DefaultLogger.Named("meter"), // default logger
+		},
 	}
 }
 
-func (b *MeterProviderBuilder) AddMetricOption(options ...sdkmetric.Option) *MeterProviderBuilder {
+// WithLogger sets the logger for the meter
+func (b *MeterBuilder) WithLogger(logger *zap.Logger) *MeterBuilder {
+	b.config.log = logger
+	return b
+}
+
+// WithName sets the name for the meter
+func (b *MeterBuilder) WithName(name string) *MeterBuilder {
+	b.config.name = name
+	return b
+}
+
+// WithTag sets the tag for the meter
+func (b *MeterBuilder) WithTag(tag string) *MeterBuilder {
+	b.config.tag = tag
+	return b
+}
+
+// WithExemplarFilter sets the exemplar filter for the meter
+func (b *MeterBuilder) WithExemplarFilter(filter exemplar.Filter) *MeterBuilder {
+	b.config.exemplarFilter = filter
+	return b
+}
+
+// WithAttributes sets the attributes for the meter
+func (b *MeterBuilder) WithAttributes(attrs ...attribute.KeyValue) *MeterBuilder {
+	b.config.attributes = append(b.config.attributes, attrs...)
+	return b
+}
+
+// AddMetricOption adds SDK metric options to the meter provider.
+// These options will be applied when building the meter provider.
+// Examples include sdkmetric.WithResource(), sdkmetric.WithReader(), etc.
+func (b *MeterBuilder) AddMetricOption(options ...sdkmetric.Option) *MeterBuilder {
 	b.options = append(b.options, options...)
 	return b
 }
 
-func (b *MeterProviderBuilder) Exporter(ctx context.Context, opts ...otlpmetrichttp.Option) *MeterProviderBuilder {
-	var metricExporter *otlpmetrichttp.Exporter
-	var err error
+// Build creates and returns the MeterProvider along with a cleanup function
+func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkmetric.MeterProvider, CloseFunc, error) {
+	if option == nil || len(option) == 0 {
+		return nil, nil, errors.New("config must be set")
+	}
+	for _, o := range option {
+		o.apply(b)
+	}
 
-	metricExporter, err = otlpmetrichttp.New(ctx, opts...)
+	// Create resource with attributes if not already set
+	if b.config.resource == nil {
+		res, err := resource.New(ctx,
+			resource.WithFromEnv(),
+			resource.WithHost(),
+			resource.WithHostID(),
+			resource.WithTelemetrySDK(),
+			resource.WithOS(),
+			resource.WithProcess(),
+			resource.WithContainer(),
+			resource.WithAttributes(b.config.attributes...),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		b.config.resource = res
+	}
+
+	err := b.client.metricExporter(ctx)
 	if err != nil {
-		b.log.Named("meterBuilder").Fatal("failed to create metric exporter", zap.Error(err))
-		return b
+		b.config.log.Error("failed to create exporter", zap.Error(err))
+		return nil, nil, err
 	}
 
-	//for attempt := 1; attempt <= defaultRetryAttempts; attempt++ {
-	//	metricExporter, err = otlpmetrichttp.New(ctx, opts...)
-	//	if err == nil {
-	//		break
-	//	}
-	//	if b.log != nil {
-	//		b.log.Named("meterBuilder").Warn("retry creating metric exporter", zap.Int("attempt", attempt), zap.Error(err))
-	//	}
-	//	time.Sleep(defaultRetryDelay)
-	//}
-	//
-	//if err != nil {
-	//	if b.log != nil {
-	//		b.log.Named("meterBuilder").Error("failed to create metric exporter", zap.Error(err))
-	//	}
-	//	return b
-	//}
-
-	//healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	//defer cancel()
-	//
-	//if err := metricExporter.ForceFlush(healthCtx); err != nil {
-	//	b.log.Named("meterBuilder").Error("metric exporter not ready", zap.Error(err))
-	//}
-
-	b.exporter = metricExporter
-	return b
-}
-
-func (b *MeterProviderBuilder) GrpcExporter(ctx context.Context, opts ...otlpmetricgrpc.Option) *MeterProviderBuilder {
-	metricExporter, err := otlpmetricgrpc.New(ctx, opts...)
+	err = b.client.debug()
 	if err != nil {
-		b.log.Named("meterBuilder").Fatal("failed to create metric exporter", zap.Error(err))
-		return b
+		b.config.log.Error("failed to create debug exporter", zap.Error(err))
+		return nil, nil, err
 	}
 
-	b.exporter = metricExporter
-	return b
-}
-
-func (b *MeterProviderBuilder) isReady() bool {
-	if b.exporter == nil {
-		return false
-	}
-	return true
-}
-
-func (b *MeterProviderBuilder) Build() (*sdkmetric.MeterProvider, CloseFunc, error) {
-	if !b.isReady() {
-		return nil, nil, errors.New("metric exporter is nil, cannot build meter provider")
+	// Create provider options
+	providerOptions := []sdkmetric.Option{
+		sdkmetric.WithResource(b.config.resource),
 	}
 
-	if b.ReaderInterval <= 0 {
-		b.ReaderInterval = time.Second * 5
+	if b.config.exemplarFilter != nil {
+		providerOptions = append(providerOptions, sdkmetric.WithExemplarFilter(b.config.exemplarFilter))
 	}
 
-	// Use pooling for reader
-	reader := sdkmetric.NewPeriodicReader(
-		b.exporter,
-		sdkmetric.WithInterval(b.ReaderInterval),
-		sdkmetric.WithTimeout(b.ReaderInterval/2),
-	)
-	if reader == nil {
-		return nil, nil, errors.New("metric reader is not initialized")
-	}
-	b.reader = reader
-
-	b.options = append(b.options, sdkmetric.WithReader(reader), sdkmetric.WithResource(b.resource))
-
-	if b.exemplarFilter != nil {
-		b.options = append(b.options, sdkmetric.WithExemplarFilter(b.exemplarFilter))
+	// Apply any additional options that were added via AddMetricOption
+	if len(b.options) > 0 {
+		providerOptions = append(providerOptions, b.options...)
 	}
 
-	provider := sdkmetric.NewMeterProvider(b.options...)
-	if provider == nil {
-		return nil, nil, errors.New("meter provider failed to initialize")
-	}
+	// Create provider with readers
+	provider := b.client.mergeMeter(providerOptions)
 
+	// Set global MeterProvider
 	otel.SetMeterProvider(provider)
 
-	if b.ShutdownTimeout <= 0 {
-		b.ShutdownTimeout = time.Second * 5
+	if b.client.ShutdownTimeout < 0 {
+		b.client.ShutdownTimeout = 5 * time.Second
 	}
 
-	if b.log == nil {
-		b.log = log.DefaultLogger
-	}
-	b.log.Named("meterBuilder").Debug("meter provider created")
+	b.config.log.Debug("meter provider created")
 
+	// Return provider with cleanup function
 	return provider, func(ctx context.Context) error {
-		ctx, cancel := context.WithTimeout(ctx, b.ShutdownTimeout)
+		ctx, cancel := context.WithTimeout(ctx, b.client.ShutdownTimeout)
 		defer cancel()
-
 		return provider.Shutdown(ctx)
 	}, nil
 }
 
-func (b *MeterProviderBuilder) Reader() *sdkmetric.PeriodicReader {
-	return b.reader
+type DebugMetric struct {
+	Encoder             stdoutmetric.Encoder
+	Writer              io.Writer
+	PrettyPrint         bool
+	TemporalitySelector sdkmetric.TemporalitySelector
+	AggregationSelector sdkmetric.AggregationSelector
+	Timestamps          bool
+}
+
+func (d *DebugMetric) apply() (opts []stdoutmetric.Option) {
+	if d.Encoder != nil {
+		opts = append(opts, stdoutmetric.WithEncoder(d.Encoder))
+	}
+	if d.Writer != nil {
+		opts = append(opts, stdoutmetric.WithWriter(d.Writer))
+	}
+	if d.PrettyPrint {
+		opts = append(opts, stdoutmetric.WithPrettyPrint())
+	}
+	if d.TemporalitySelector != nil {
+		opts = append(opts, stdoutmetric.WithTemporalitySelector(d.TemporalitySelector))
+	}
+	if d.AggregationSelector != nil {
+		opts = append(opts, stdoutmetric.WithAggregationSelector(d.AggregationSelector))
+	}
+	if !d.Timestamps {
+		opts = append(opts, stdoutmetric.WithoutTimestamps())
+	}
+	return
 }
