@@ -15,9 +15,13 @@ import (
 func main() {
 	ctx := context.Background()
 	config := &builder.TraceConnector{
-		Endpoint:            "localhost:4318",
-		Insecure:            false,
-		Debug:               false,
+		Endpoint: "localhost:4318",
+		Insecure: false,
+		Debug:    false,
+		DebugOption: builder.DebugTrace{
+			Timestamps:  false,
+			PrettyPrint: false,
+		},
 		Headers:             map[string]string{},
 		URLPath:             "/v1/traces",
 		HTTPTLSClientConfig: &tls.Config{InsecureSkipVerify: true},
