@@ -2,6 +2,7 @@ package builder
 
 import (
 	"context"
+	"errors"
 	"github.com/hinha/floody/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -19,7 +20,6 @@ type TracerConfig struct {
 	name            string
 	tag             string
 	attributes      []attribute.KeyValue
-	shutdownTimeout time.Duration
 	stdoutExporter  sdktrace.SpanExporter
 	traceHttpOption []otlptracehttp.Option
 }
@@ -34,8 +34,7 @@ type TracerBuilder struct {
 func NewTracerBuilder() *TracerBuilder {
 	return &TracerBuilder{
 		config: TracerConfig{
-			shutdownTimeout: time.Second * 5,                   // default timeout
-			log:             log.DefaultLogger.Named("tracer"), // default logger
+			log: log.DefaultLogger.Named("tracer"), // default logger
 		},
 	}
 }
@@ -64,26 +63,12 @@ func (b *TracerBuilder) WithAttributes(attrs ...attribute.KeyValue) *TracerBuild
 	return b
 }
 
-// WithShutdownTimeout sets the shutdown timeout for the tracer
-func (b *TracerBuilder) WithShutdownTimeout(timeout time.Duration) *TracerBuilder {
-	b.config.shutdownTimeout = timeout
-	return b
-}
-
-func (b *TracerBuilder) DebugExporter() *TracerBuilder {
-	// Tambahkan stdout exporter
-	stdoutExporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
-	if err != nil {
-		b.config.log.Error("failed to create stdout exporter", zap.Error(err))
-		return b
-	}
-	b.config.stdoutExporter = stdoutExporter
-
-	return b
-}
-
 // Build creates and returns the TracerProvider along with a cleanup function
 func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdktrace.TracerProvider, CloseFunc, error) {
+	if option == nil || len(option) == 0 {
+		return nil, nil, errors.New("config must be set")
+	}
+
 	for _, o := range option {
 		o.apply(b)
 	}
@@ -122,12 +107,32 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 	// Set global TracerProvider
 	otel.SetTracerProvider(provider)
 
+	if b.client.ShutdownTimeout < 0 {
+		b.client.ShutdownTimeout = 5 * time.Second
+	}
+
 	b.config.log.Debug("tracer provider created")
 
 	// Return provider with cleanup function
 	return provider, func(ctx context.Context) error {
-		ctx, cancel := context.WithTimeout(ctx, b.config.shutdownTimeout)
+		ctx, cancel := context.WithTimeout(ctx, b.client.ShutdownTimeout)
 		defer cancel()
 		return provider.Shutdown(ctx)
 	}, nil
+}
+
+type DebugTrace struct {
+	Timestamps  bool
+	PrettyPrint bool
+}
+
+func (d *DebugTrace) apply() (opts []stdouttrace.Option) {
+	if !d.Timestamps {
+		opts = append(opts, stdouttrace.WithoutTimestamps())
+	}
+	if d.PrettyPrint {
+		opts = append(opts, stdouttrace.WithPrettyPrint())
+	}
+
+	return
 }
