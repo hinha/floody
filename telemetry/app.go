@@ -10,13 +10,19 @@ import (
 )
 
 type Application[M metric.Meter, T trace.Tracer] struct {
-	ctx          context.Context
-	tracer       T
-	traceOptions []trace.TracerOption
+	ctx    context.Context
+	tracer T
+	meter  M
 
-	meter        M
-	meterOptions []metric.MeterOption
-	spanOptions  []trace.SpanStartOption
+	spanOptions []trace.SpanStartOption
+}
+
+func (app *Application[M, T]) setMeter(meter M) {
+	app.meter = meter
+}
+
+func (app *Application[M, T]) setTracer(tracer T) {
+	app.tracer = tracer
 }
 
 func (app *Application[M, T]) GetMeter() M {
