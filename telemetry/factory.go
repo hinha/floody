@@ -16,6 +16,11 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+const (
+	LoggerNameTelemetry = "telemetry"
+	LoggerNameExporter  = "otlp"
+)
+
 // An Option configures a Logger.
 type Option interface {
 	apply(*Options)
@@ -103,12 +108,26 @@ func (f *Factory) GetConfigs() *Options {
 	return f.Options
 }
 
+func (f *Factory) configureLogger() *zap.Logger {
+	baseLogger := f.setupLogger()
+
+	loggerOpts := []zap.Option{
+		zap.AddCaller(),
+		zap.AddStacktrace(zapcore.ErrorLevel),
+	}
+
+	return baseLogger.
+		WithOptions(loggerOpts...).
+		Named(LoggerNameTelemetry).
+		With(zap.String("exporter", LoggerNameExporter))
+}
+
 func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFunc, error) {
 	for _, opt := range opts {
 		opt.apply(f.Options)
 	}
-	log := f.setupLogger().WithOptions(zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel)).Named("telemetry")
-	f.logger = log.With(zap.String("exporter", "otlp"))
+
+	f.logger = f.configureLogger()
 
 	var connectorMetric builder.MeterOption
 	if f.MeterHTTP {
@@ -120,7 +139,7 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 	obsMeter, meterCloser, err := meterProvider.
 		AddMetricOption(f.MeterOption...).
 		WithAttributes(f.attributes...).
-		WithLogger(f.logger.Named("meter")).
+		WithLogger(f.logger.Named("meter\t")).
 		WithServiceName(f.AppName).
 		Build(ctx, connectorMetric)
 	if err != nil {
@@ -142,7 +161,7 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 	}
 	traceProvider := builder.NewTracerBuilder()
 	obsTrace, traceCloser, err := traceProvider.
-		WithLogger(f.logger.Named("tracer")).
+		WithLogger(f.logger.Named("trace\t")).
 		WithAttributes(f.attributes...).
 		WithServiceName(f.AppName).
 		Build(ctx, connectorTracer)
