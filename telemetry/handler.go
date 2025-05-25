@@ -11,15 +11,16 @@ import (
 )
 
 type NewMiddleware struct {
-	app IFactory
+	app         IFactory
+	startOption []trace.SpanStartOption
 }
 
-func NewMiddlewareWithConfig(app IFactory) *NewMiddleware {
+func NewMiddlewareWithConfig(app IFactory, startOption ...trace.SpanStartOption) *NewMiddleware {
 	if app == nil {
 		return &NewMiddleware{}
 	}
 
-	return &NewMiddleware{app: app}
+	return &NewMiddleware{app: app, startOption: startOption}
 }
 
 func (n *NewMiddleware) Handler(operation string, h http.Handler) http.Handler {
@@ -32,12 +33,15 @@ func (n *NewMiddleware) Handler(operation string, h http.Handler) http.Handler {
 			span.SetName(makeTransactionName(r))
 			span.SetAttributes(attribute.String("name", makeTransactionName(r)))
 		}
+		defer span.End(trace.WithStackTrace(true))
+
 		h.ServeHTTP(w, r)
-	}), "",
+	}), operation,
 		otelhttp.WithServerName(n.app.GetConfigs().AppName),
 		otelhttp.WithMeterProvider(otel.GetMeterProvider()),
 		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
-		otelhttp.WithPropagators(otel.GetTextMapPropagator()))
+		otelhttp.WithPropagators(otel.GetTextMapPropagator()),
+		otelhttp.WithSpanOptions(n.startOption...))
 }
 
 //func (n *NewMiddleware) Handler(h http.Handler) http.Handler {
