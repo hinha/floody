@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.uber.org/zap"
 	"time"
 )
@@ -17,11 +18,10 @@ import (
 // TracerConfig holds the configuration for the tracer
 type TracerConfig struct {
 	log             *zap.Logger
-	name            string
-	tag             string
 	attributes      []attribute.KeyValue
 	stdoutExporter  sdktrace.SpanExporter
 	traceHttpOption []otlptracehttp.Option
+	serviceName     string
 }
 
 // TracerBuilder implements the builder pattern for creating a tracer
@@ -45,21 +45,15 @@ func (b *TracerBuilder) WithLogger(logger *zap.Logger) *TracerBuilder {
 	return b
 }
 
-// WithName sets the name for the tracer
-func (b *TracerBuilder) WithName(name string) *TracerBuilder {
-	b.config.name = name
-	return b
-}
-
-// WithTag sets the tag for the tracer
-func (b *TracerBuilder) WithTag(tag string) *TracerBuilder {
-	b.config.tag = tag
-	return b
-}
-
 // WithAttributes sets the attributes for the tracer
 func (b *TracerBuilder) WithAttributes(attrs ...attribute.KeyValue) *TracerBuilder {
 	b.config.attributes = append(b.config.attributes, attrs...)
+	return b
+}
+
+// WithServiceName sets the service name for the tracer
+func (b *TracerBuilder) WithServiceName(serviceName string) *TracerBuilder {
+	b.config.serviceName = serviceName
 	return b
 }
 
@@ -74,6 +68,12 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 	}
 
 	// Create resource with attributes
+	// Add service name to attributes if set
+	attrs := b.config.attributes
+	if b.config.serviceName != "" {
+		attrs = append(attrs, semconv.ServiceNameKey.String(b.config.serviceName))
+	}
+
 	res, err := resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithHost(),
@@ -82,7 +82,7 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 		resource.WithOS(),
 		resource.WithProcess(),
 		resource.WithContainer(),
-		resource.WithAttributes(b.config.attributes...),
+		resource.WithAttributes(attrs...),
 	)
 	if err != nil {
 		return nil, nil, err
