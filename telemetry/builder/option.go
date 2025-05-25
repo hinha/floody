@@ -278,7 +278,10 @@ func WithTraceGrpc(c *TraceConnector, batchOption ...sdktrace.BatchSpanProcessor
 		}
 		c.traceGrpcOption = append(c.traceGrpcOption, otlptracegrpc.WithRetry(c.GRPCRetry))
 
-		otlptracegrpc.WithEndpoint(c.Endpoint)
+		// Ensure endpoint is properly set
+		if c.Endpoint != "" {
+			c.traceGrpcOption = append(c.traceGrpcOption, otlptracegrpc.WithEndpoint(c.Endpoint))
+		}
 		c.setGrpc = true
 	})
 }
