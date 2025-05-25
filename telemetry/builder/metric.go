@@ -8,8 +8,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.uber.org/zap"
 	"io"
 	"time"
@@ -20,12 +20,10 @@ type CloseFunc func(ctx context.Context) error
 
 // MeterConfig holds the configuration for the meter
 type MeterConfig struct {
-	log            *zap.Logger
-	name           string
-	tag            string
-	resource       *resource.Resource
-	exemplarFilter exemplar.Filter
-	attributes     []attribute.KeyValue
+	log         *zap.Logger
+	resource    *resource.Resource
+	attributes  []attribute.KeyValue
+	serviceName string
 }
 
 // MeterBuilder implements the builder pattern for creating a meter provider
@@ -50,27 +48,15 @@ func (b *MeterBuilder) WithLogger(logger *zap.Logger) *MeterBuilder {
 	return b
 }
 
-// WithName sets the name for the meter
-func (b *MeterBuilder) WithName(name string) *MeterBuilder {
-	b.config.name = name
-	return b
-}
-
-// WithTag sets the tag for the meter
-func (b *MeterBuilder) WithTag(tag string) *MeterBuilder {
-	b.config.tag = tag
-	return b
-}
-
-// WithExemplarFilter sets the exemplar filter for the meter
-func (b *MeterBuilder) WithExemplarFilter(filter exemplar.Filter) *MeterBuilder {
-	b.config.exemplarFilter = filter
-	return b
-}
-
 // WithAttributes sets the attributes for the meter
 func (b *MeterBuilder) WithAttributes(attrs ...attribute.KeyValue) *MeterBuilder {
 	b.config.attributes = append(b.config.attributes, attrs...)
+	return b
+}
+
+// WithServiceName sets the service name for the meter
+func (b *MeterBuilder) WithServiceName(serviceName string) *MeterBuilder {
+	b.config.serviceName = serviceName
 	return b
 }
 
@@ -93,6 +79,12 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 
 	// Create resource with attributes if not already set
 	if b.config.resource == nil {
+		// Add service name to attributes if set
+		attrs := b.config.attributes
+		if b.config.serviceName != "" {
+			attrs = append(attrs, semconv.ServiceNameKey.String(b.config.serviceName))
+		}
+
 		res, err := resource.New(ctx,
 			resource.WithFromEnv(),
 			resource.WithHost(),
@@ -101,7 +93,7 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 			resource.WithOS(),
 			resource.WithProcess(),
 			resource.WithContainer(),
-			resource.WithAttributes(b.config.attributes...),
+			resource.WithAttributes(attrs...),
 		)
 		if err != nil {
 			return nil, nil, err
@@ -126,10 +118,6 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 		sdkmetric.WithResource(b.config.resource),
 	}
 
-	if b.config.exemplarFilter != nil {
-		providerOptions = append(providerOptions, sdkmetric.WithExemplarFilter(b.config.exemplarFilter))
-	}
-
 	// Apply any additional options that were added via AddMetricOption
 	if len(b.options) > 0 {
 		providerOptions = append(providerOptions, b.options...)
@@ -145,7 +133,7 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 		b.client.ShutdownTimeout = 5 * time.Second
 	}
 
-	b.config.log.Debug("meter provider created")
+	b.config.log.Info("meter provider created")
 
 	// Return provider with cleanup function
 	return provider, func(ctx context.Context) error {
