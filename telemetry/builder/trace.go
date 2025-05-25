@@ -34,7 +34,7 @@ type TracerBuilder struct {
 func NewTracerBuilder() *TracerBuilder {
 	return &TracerBuilder{
 		config: TracerConfig{
-			log: log.DefaultLogger.Named("tracer"), // default logger
+			log: log.DefaultLogger.Named("trace"), // default logger
 		},
 	}
 }
@@ -93,7 +93,7 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 		b.config.log.Error("failed to create exporter", zap.Error(err))
 		return nil, nil, err
 	}
-	err = b.client.debug()
+	err = b.client.debug(b.config.log)
 	if err != nil {
 		b.config.log.Error("failed to create debug exporter", zap.Error(err))
 		return nil, nil, err
@@ -111,7 +111,7 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 		b.client.ShutdownTimeout = 5 * time.Second
 	}
 
-	b.config.log.Debug("tracer provider created")
+	b.config.log.Info("tracer provider created")
 
 	// Return provider with cleanup function
 	return provider, func(ctx context.Context) error {

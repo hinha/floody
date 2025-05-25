@@ -4,15 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"time"
@@ -65,18 +63,20 @@ type MeterConnector struct {
 }
 
 // debug creates a debug exporter if Debug is true
-func (m *MeterConnector) debug() error {
+func (m *MeterConnector) debug(log *zap.Logger) error {
 	if !m.Debug {
 		return nil
 	}
 
 	apply := m.DebugOption.apply()
-	exporter, err := stdoutmetric.New(apply...)
+
+	// Create a custom exporter that wraps the stdoutmetric exporter
+	exp, err := NewMetricExporter(log, apply...)
 	if err != nil {
-		return fmt.Errorf("creating stdout exporter: %w", err)
+		return err
 	}
 
-	m.readerDebug = sdkmetric.NewPeriodicReader(exporter, m.readerOptions...)
+	m.readerDebug = sdkmetric.NewPeriodicReader(exp, m.readerOptions...)
 	return nil
 }
 
@@ -336,16 +336,18 @@ func uriConnector(c *TraceConnector) {
 	}
 }
 
-func (m *TraceConnector) debug() error {
+func (m *TraceConnector) debug(log *zap.Logger) error {
 	if !m.Debug {
 		return nil
 	}
 
 	apply := m.DebugOption.apply()
-	exporter, err := stdouttrace.New(apply...)
+
+	exporter, err := NewTraceExporter(log, apply...)
 	if err != nil {
-		return fmt.Errorf("creating stdout exporter: %w", err)
+		return err
 	}
+	exporter.Timestamps(m.DebugOption.Timestamps)
 
 	m.processorDebug = sdktrace.NewBatchSpanProcessor(exporter)
 	return nil

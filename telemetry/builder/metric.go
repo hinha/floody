@@ -107,7 +107,7 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 		return nil, nil, err
 	}
 
-	err = b.client.debug()
+	err = b.client.debug(b.config.log)
 	if err != nil {
 		b.config.log.Error("failed to create debug exporter", zap.Error(err))
 		return nil, nil, err
