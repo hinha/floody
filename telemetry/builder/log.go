@@ -171,7 +171,5 @@ func (e *MetricExporter) Export(ctx context.Context, data *metricdata.ResourceMe
 
 	e.logger.Debug("exporting metrics", fields...)
 
-	// Forward to the wrapped exporter
-	//return e.exporter.Export(ctx, data)
 	return nil
 }
