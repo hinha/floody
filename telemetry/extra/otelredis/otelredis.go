@@ -1,0 +1,182 @@
+package redisotel
+
+import (
+	"context"
+	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
+	"go.opentelemetry.io/otel/trace"
+	"strings"
+
+	"github.com/go-redis/redis/extra/rediscmd/v8"
+	"github.com/go-redis/redis/v8"
+)
+
+const (
+	defaultTracerName = "redis/v8"
+	limitKeyLength    = 32 // Limit for key length in command string representation
+)
+
+type TracingHook struct {
+	tracer trace.Tracer
+	attrs  []attribute.KeyValue
+	dbNum  int
+}
+
+func NewTracingHook(opts ...Option) *TracingHook {
+	cfg := &config{
+		tp: otel.GetTracerProvider(),
+		attrs: []attribute.KeyValue{
+			semconv.DBSystemRedis,
+		},
+	}
+	for _, opt := range opts {
+		opt.apply(cfg)
+	}
+
+	if cfg.keyLimit == 0 || cfg.keyLimit <= limitKeyLength {
+		cfg.keyLimit = limitKeyLength
+	}
+
+	tracer := cfg.tp.Tracer(
+		defaultTracerName,
+		trace.WithInstrumentationVersion("semver:"+redis.Version()),
+	)
+	return &TracingHook{tracer: tracer, attrs: cfg.attrs, dbNum: cfg.dbNum}
+}
+
+func (th *TracingHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return ctx, nil
+	}
+
+	opts := []trace.SpanStartOption{
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(th.attrs...),
+		trace.WithAttributes(
+			semconv.DBStatementKey.String(rediscmd.CmdString(cmd)),
+		),
+	}
+
+	cmdFmt := th.formatQuery(cmd.Args()...)
+	ctx, _ = th.tracer.Start(ctx, cmdFmt, opts...)
+
+	return ctx, nil
+}
+
+func (th *TracingHook) AfterProcess(ctx context.Context, cmd redis.Cmder) error {
+	span := trace.SpanFromContext(ctx)
+	if err := cmd.Err(); err != nil {
+		recordError(ctx, span, err)
+	}
+	span.End()
+	return nil
+}
+
+func (th *TracingHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
+	if !trace.SpanFromContext(ctx).IsRecording() {
+		return ctx, nil
+	}
+
+	summary, cmdsString := rediscmd.CmdsString(cmds)
+
+	opts := []trace.SpanStartOption{
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(th.attrs...),
+		trace.WithAttributes(
+			semconv.DBStatementKey.String(cmdsString),
+			attribute.Int("db.redis.num_cmd", len(cmds)),
+		),
+	}
+
+	ctx, _ = th.tracer.Start(ctx, "pipeline "+summary, opts...)
+
+	return ctx, nil
+}
+
+func (th *TracingHook) AfterProcessPipeline(ctx context.Context, cmds []redis.Cmder) error {
+	span := trace.SpanFromContext(ctx)
+	if err := cmds[0].Err(); err != nil {
+		recordError(ctx, span, err)
+	}
+	span.End()
+	return nil
+}
+
+func (th *TracingHook) formatQuery(args ...interface{}) string {
+	cmdFmt := strings.ToUpper("redis") + " "
+	for i, key := range args {
+		switch v := key.(type) {
+		case string:
+			if i == 0 {
+				cmdFmt += strings.ToUpper(v) + fmt.Sprintf(" db%d", th.dbNum)
+				continue
+			}
+
+			if len(v) > limitKeyLength {
+				cmdFmt += " " + v[:limitKeyLength]
+			} else {
+				cmdFmt += " " + v
+			}
+		}
+	}
+	return cmdFmt
+}
+
+func recordError(ctx context.Context, span trace.Span, err error) {
+	if err != redis.Nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+}
+
+type config struct {
+	keyLimit int
+	dbNum    int
+	tp       trace.TracerProvider
+	attrs    []attribute.KeyValue
+}
+
+// Option specifies instrumentation configuration options.
+type Option interface {
+	apply(*config)
+}
+
+type optionFunc func(*config)
+
+func (o optionFunc) apply(c *config) {
+	o(c)
+}
+
+// WithTracerProvider specifies a tracer provider to use for creating a tracer.
+// If none is specified, the global provider is used.
+func WithTracerProvider(provider trace.TracerProvider) Option {
+	return optionFunc(func(cfg *config) {
+		if provider != nil {
+			cfg.tp = provider
+		}
+	})
+}
+
+// WithAttributes specifies additional attributes to be added to the span.
+func WithAttributes(attrs ...attribute.KeyValue) Option {
+	return optionFunc(func(cfg *config) {
+		cfg.attrs = append(cfg.attrs, attrs...)
+	})
+}
+
+func WithDBNum(dbNum int) Option {
+	return optionFunc(func(cfg *config) {
+		cfg.dbNum = dbNum
+	})
+}
+
+func WithKeyLimit(limit int) Option {
+	return optionFunc(func(cfg *config) {
+		if limit > 0 {
+			cfg.keyLimit = limit
+		}
+	})
+}
