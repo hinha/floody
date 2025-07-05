@@ -23,65 +23,23 @@ func NewMiddlewareWithConfig(app IFactory, startOption ...trace.SpanStartOption)
 	return &NewMiddleware{app: app, startOption: startOption}
 }
 
-func (n *NewMiddleware) Handler(operation string, h http.Handler) http.Handler {
-	//return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
-	return otelhttp.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		span := trace.SpanFromContext(ctx)
+func (n *NewMiddleware) Handler(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		operation := makeTransactionName(r)
 
-		if span != nil {
-			span.SetName(makeTransactionName(r))
-			span.SetAttributes(attribute.String("name", makeTransactionName(r)))
-		}
-		defer span.End(trace.WithStackTrace(true))
+		otelHandler := otelhttp.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h.ServeHTTP(w, r)
+		}), operation,
+			otelhttp.WithServerName(n.app.GetConfigs().AppName),
+			otelhttp.WithMeterProvider(otel.GetMeterProvider()),
+			otelhttp.WithTracerProvider(otel.GetTracerProvider()),
+			otelhttp.WithPropagators(otel.GetTextMapPropagator()),
+			otelhttp.WithSpanOptions(n.startOption...),
+		)
 
-		h.ServeHTTP(w, r)
-	}), operation,
-		otelhttp.WithServerName(n.app.GetConfigs().AppName),
-		otelhttp.WithMeterProvider(otel.GetMeterProvider()),
-		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
-		otelhttp.WithPropagators(otel.GetTextMapPropagator()),
-		otelhttp.WithSpanOptions(n.startOption...))
+		otelHandler.ServeHTTP(w, r)
+	})
 }
-
-//func (n *NewMiddleware) Handler(h http.Handler) http.Handler {
-//	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//		// TODO Combine meter
-//		spanOption := WithSpanOption(trace.WithAttributes(
-//			semcov17.HTTPMethodKey.String(r.Method),
-//			semcov17.HTTPRouteKey.String(r.URL.Path),
-//		))
-//
-//		ctx, span := n.app.StartTransaction(r.Context(), makeTransactionName(r), spanOption)
-//		if span != nil {
-//			defer span.End()
-//		}
-//
-//		defer func() {
-//			if r := recover(); r != nil {
-//				// Log panic
-//				if span != nil {
-//					span.End()
-//				}
-//				panic(r) // re-panic after cleanup
-//			}
-//		}()
-//
-//		if span == nil {
-//			h.ServeHTTP(w, r) // Just pass the response without telemetry
-//			return
-//		}
-//
-//		// Apply request enrichment
-//		n.SetWebRequestHTTP(span, r)
-//
-//		// Apply response enrichment
-//		w = n.SetWebResponse(span, w)
-//
-//		r = r.WithContext(ctx)
-//		h.ServeHTTP(w, r)
-//	})
-//}
 
 // SetWebRequestHTTP enriches the span with HTTP request attributes.
 func (n *NewMiddleware) SetWebRequestHTTP(span trace.Span, r *http.Request) {
