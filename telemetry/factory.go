@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"github.com/hinha/floody/log"
 	"github.com/hinha/floody/telemetry/builder"
 	"go.opentelemetry.io/otel"
@@ -127,30 +128,39 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 		opt.apply(f.Options)
 	}
 
+	if f.MeterConnector == nil && f.TraceConnector == nil {
+		return nil, fmt.Errorf("both MeterConnector and TraceConnector cannot be nil")
+	}
+
 	f.logger = f.configureLogger()
 
-	var connectorMetric builder.MeterOption
-	if f.MeterHTTP {
-		connectorMetric = builder.WithMeterHttp(f.MeterConnector, f.readerOptions...)
-	} else {
-		connectorMetric = builder.WithMeterGrpc(f.MeterConnector, f.readerOptions...)
-	}
-	meterProvider := builder.NewMeterProvider()
-	obsMeter, meterCloser, err := meterProvider.
-		AddMetricOption(f.MeterOption...).
-		WithAttributes(f.attributes...).
-		WithLogger(f.logger.Named("meter\t")).
-		WithServiceName(f.AppName).
-		Build(ctx, connectorMetric)
-	if err != nil {
-		return nil, err
-	}
+	var closersFn []builder.CloseFunc
 
-	SetMetricTelemetry(obsMeter.Meter(f.AppName,
-		metric.WithInstrumentationVersion(f.Version), metric.WithInstrumentationAttributes(f.attributes...)))
-	f.app.setMeter(GetMetricTelemetry())
-	if err := f.app.observeMeter(obsMeter); err != nil {
-		f.logger.Error("failed to observe meter", zap.Error(err))
+	if f.MeterConnector != nil {
+		var connectorMetric builder.MeterOption
+		if f.MeterHTTP {
+			connectorMetric = builder.WithMeterHttp(f.MeterConnector, f.readerOptions...)
+		} else {
+			connectorMetric = builder.WithMeterGrpc(f.MeterConnector, f.readerOptions...)
+		}
+		meterProvider := builder.NewMeterProvider()
+		obsMeter, meterCloser, err := meterProvider.
+			AddMetricOption(f.MeterOption...).
+			WithAttributes(f.attributes...).
+			WithLogger(f.logger.Named("meter\t")).
+			WithServiceName(f.AppName).
+			Build(ctx, connectorMetric)
+		if err != nil {
+			return nil, err
+		}
+		closersFn = append(closersFn, meterCloser)
+
+		SetMetricTelemetry(obsMeter.Meter(f.AppName,
+			metric.WithInstrumentationVersion(f.Version), metric.WithInstrumentationAttributes(f.attributes...)))
+		f.app.setMeter(GetMetricTelemetry())
+		if err := f.app.observeMeter(obsMeter); err != nil {
+			f.logger.Error("failed to observe meter", zap.Error(err))
+		}
 	}
 
 	var connectorTracer builder.TraceOption
@@ -168,6 +178,7 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 	if err != nil {
 		return nil, err
 	}
+	closersFn = append(closersFn, traceCloser)
 
 	SetTraceTelemetry(obsTrace.Tracer(f.AppName,
 		trace.WithInstrumentationVersion(f.Version),
@@ -177,7 +188,7 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
 	f.logger.Info("telemetry factory build")
-	return []builder.CloseFunc{meterCloser, traceCloser}, nil
+	return closersFn, nil
 }
 
 func (f *Factory) StartTransaction(
