@@ -17,12 +17,12 @@ import (
 	"github.com/hinha/floody/telemetry"
 	"github.com/hinha/floody/telemetry/builder"
 	"github.com/joho/godotenv"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 	"log"
 	"math/rand"
 	"net/http"
@@ -156,14 +156,38 @@ func main() {
 
 	// Init Telemetry
 	otl := telemetry.NewFactory(options)
+	loc, _ := time.LoadLocation("Asia/Jakarta")
+
+	// set logger for telemetry
+	otl.SetLogger(func() zerolog.LevelWriter {
+		return zerolog.MultiLevelWriter(zerolog.ConsoleWriter{
+			Out:          os.Stdout,
+			TimeFormat:   "2006-01-02 15:04:05",
+			TimeLocation: loc,
+			//FormatTimestamp: func(i interface{}) string {
+			//	loc, _ := time.LoadLocation("Asia/Jakarta")
+			//	t := zerolog.TimeFieldFormat
+			//	if str, ok := i.(string); ok {
+			//		parsed, err := time.Parse(t, str)
+			//		if err == nil {
+			//			return parsed.In(loc).Format("2006-01-02 15:04:05")
+			//		}
+			//	}
+			//	return ""
+			//},
+		})
+	})
+
 	closers, err := otl.Build(ctx,
 		telemetry.WithAttribute(semconv.SessionIDKey.String("1234567890")),
 		telemetry.WithMeterReaderOption(
 			sdkmetric.WithInterval(time.Second*5),
 			sdkmetric.WithTimeout(30*time.Second)),
 	)
+
+	log := otl.GetLogger()
 	if err != nil {
-		otl.GetLogger().Fatal("Telemetry error", zap.Error(err))
+		log.Fatal().Err(err).Msg("Telemetry error")
 	}
 	defer func() {
 		for _, closer := range closers {
@@ -186,7 +210,7 @@ func main() {
 	middleware := telemetry.NewMiddlewareWithConfig(otl, trace.WithSpanKind(trace.SpanKindServer))
 	mux := http.NewServeMux()
 
-	mux.Handle("/", middleware.Handler("index", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/", middleware.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Seed dengan waktu saat ini
 		rand.Seed(time.Now().UnixNano())
 		randomInt := rand.Intn(200)
@@ -199,6 +223,6 @@ func main() {
 	log.Print("Listening on :8081...")
 	err = http.ListenAndServe(":8081", mux)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 }
