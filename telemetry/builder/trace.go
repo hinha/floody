@@ -3,7 +3,7 @@ package builder
 import (
 	"context"
 	"errors"
-	"github.com/hinha/floody/log"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -11,13 +11,12 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-	"go.uber.org/zap"
 	"time"
 )
 
 // TracerConfig holds the configuration for the tracer
 type TracerConfig struct {
-	log             *zap.Logger
+	log             zerolog.Logger
 	attributes      []attribute.KeyValue
 	stdoutExporter  sdktrace.SpanExporter
 	traceHttpOption []otlptracehttp.Option
@@ -32,15 +31,11 @@ type TracerBuilder struct {
 
 // NewTracerBuilder creates a new TracerBuilder instance
 func NewTracerBuilder() *TracerBuilder {
-	return &TracerBuilder{
-		config: TracerConfig{
-			log: log.DefaultLogger.Named("trace"), // default logger
-		},
-	}
+	return &TracerBuilder{}
 }
 
 // WithLogger sets the logger for the tracer
-func (b *TracerBuilder) WithLogger(logger *zap.Logger) *TracerBuilder {
+func (b *TracerBuilder) WithLogger(logger zerolog.Logger) *TracerBuilder {
 	b.config.log = logger
 	return b
 }
@@ -90,12 +85,12 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 
 	err = b.client.spanExporter(ctx)
 	if err != nil {
-		b.config.log.Error("failed to create exporter", zap.Error(err))
+		b.config.log.Error().Err(err).Msg("failed to create exporter")
 		return nil, nil, err
 	}
 	err = b.client.debug(b.config.log)
 	if err != nil {
-		b.config.log.Error("failed to create debug exporter", zap.Error(err))
+		b.config.log.Error().Err(err).Msg("failed to create debug exporter")
 		return nil, nil, err
 	}
 
@@ -111,7 +106,7 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 		b.client.ShutdownTimeout = 5 * time.Second
 	}
 
-	b.config.log.Info("tracer provider created")
+	b.config.log.Info().Msg("tracer provider created")
 
 	// Return provider with cleanup function
 	return provider, func(ctx context.Context) error {

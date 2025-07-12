@@ -3,14 +3,13 @@ package builder
 import (
 	"context"
 	"errors"
-	"github.com/hinha/floody/log"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-	"go.uber.org/zap"
 	"io"
 	"time"
 )
@@ -20,7 +19,7 @@ type CloseFunc func(ctx context.Context) error
 
 // MeterConfig holds the configuration for the meter
 type MeterConfig struct {
-	log         *zap.Logger
+	log         zerolog.Logger
 	resource    *resource.Resource
 	attributes  []attribute.KeyValue
 	serviceName string
@@ -36,14 +35,12 @@ type MeterBuilder struct {
 // NewMeterProvider creates a new MeterBuilder instance
 func NewMeterProvider() *MeterBuilder {
 	return &MeterBuilder{
-		config: MeterConfig{
-			log: log.DefaultLogger.Named("meter"), // default logger
-		},
+		config: MeterConfig{},
 	}
 }
 
 // WithLogger sets the logger for the meter
-func (b *MeterBuilder) WithLogger(logger *zap.Logger) *MeterBuilder {
+func (b *MeterBuilder) WithLogger(logger zerolog.Logger) *MeterBuilder {
 	b.config.log = logger
 	return b
 }
@@ -103,13 +100,13 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 
 	err := b.client.metricExporter(ctx)
 	if err != nil {
-		b.config.log.Error("failed to create exporter", zap.Error(err))
+		b.config.log.Error().Err(err).Msg("failed to create exporter")
 		return nil, nil, err
 	}
 
 	err = b.client.debug(b.config.log)
 	if err != nil {
-		b.config.log.Error("failed to create debug exporter", zap.Error(err))
+		b.config.log.Error().Err(err).Msg("failed to create debug exporter")
 		return nil, nil, err
 	}
 
@@ -133,7 +130,7 @@ func (b *MeterBuilder) Build(ctx context.Context, option ...MeterOption) (*sdkme
 		b.client.ShutdownTimeout = 5 * time.Second
 	}
 
-	b.config.log.Info("meter provider created")
+	b.config.log.Info().Msg("meter provider created")
 
 	// Return provider with cleanup function
 	return provider, func(ctx context.Context) error {

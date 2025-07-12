@@ -4,13 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"time"
@@ -63,7 +63,7 @@ type MeterConnector struct {
 }
 
 // debug creates a debug exporter if Debug is true
-func (m *MeterConnector) debug(log *zap.Logger) error {
+func (m *MeterConnector) debug(log zerolog.Logger) error {
 	if !m.Debug {
 		return nil
 	}
@@ -336,7 +336,7 @@ func uriConnector(c *TraceConnector) {
 	}
 }
 
-func (m *TraceConnector) debug(log *zap.Logger) error {
+func (m *TraceConnector) debug(log zerolog.Logger) error {
 	if !m.Debug {
 		return nil
 	}

@@ -3,6 +3,7 @@ package builder
 import (
 	"context"
 	"fmt"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/metric"
@@ -10,15 +11,20 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-	"go.uber.org/zap"
+	"os"
 	"sync"
 	"time"
 )
 
+var DefaultLogger = zerolog.New(zerolog.ConsoleWriter{
+	Out:        os.Stdout,
+	TimeFormat: time.RFC3339,
+}).With().Timestamp().Caller().Logger()
+
 var zeroTime time.Time
 
 type TraceExporter struct {
-	logger    *zap.Logger
+	logger    zerolog.Logger
 	encoderMu sync.Mutex
 	exporter  trace.SpanExporter
 
@@ -27,11 +33,7 @@ type TraceExporter struct {
 	timestamps bool
 }
 
-func NewTraceExporter(logger *zap.Logger, options ...stdouttrace.Option) (*TraceExporter, error) {
-	if logger == nil {
-		return nil, fmt.Errorf("logger cannot be nil")
-	}
-
+func NewTraceExporter(logger zerolog.Logger, options ...stdouttrace.Option) (*TraceExporter, error) {
 	exporter, err := stdouttrace.New(options...)
 	if err != nil {
 		return nil, fmt.Errorf("creating stdout exporter: %w", err)
@@ -42,6 +44,7 @@ func NewTraceExporter(logger *zap.Logger, options ...stdouttrace.Option) (*Trace
 		exporter: exporter,
 	}, nil
 }
+
 func (e *TraceExporter) Timestamps(ts bool) {
 	e.timestamps = ts
 }
@@ -78,11 +81,11 @@ func (e *TraceExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlyS
 			}
 		}
 
-		e.logger.Debug("exporting traces", zap.Any("spans", []zap.Field{
-			zap.Any("name", stub.Name),
-			zap.String("traceId", stub.SpanContext.TraceID().String()),
-			zap.Any("spanId", stub.SpanContext.SpanID().String()),
-		}))
+		e.logger.Debug().
+			Str("name", stub.Name).
+			Str("traceId", stub.SpanContext.TraceID().String()).
+			Str("spanId", stub.SpanContext.SpanID().String()).
+			Msg("exporting traces")
 	}
 
 	return nil
@@ -110,7 +113,7 @@ func (e *TraceExporter) Shutdown(ctx context.Context) error {
 
 // MetricExporter implements the metric.Exporter interface
 type MetricExporter struct {
-	logger   *zap.Logger
+	logger   zerolog.Logger
 	exporter metric.Exporter
 }
 
@@ -123,12 +126,8 @@ func (e *MetricExporter) Shutdown(ctx context.Context) error {
 }
 
 // NewMetricExporter creates a new metricExporter that wraps a stdoutmetric exporter
-// It accepts a zap logger and optional stdoutmetric.Option parameters
-func NewMetricExporter(logger *zap.Logger, options ...stdoutmetric.Option) (*MetricExporter, error) {
-	if logger == nil {
-		return nil, fmt.Errorf("logger cannot be nil")
-	}
-
+// It accepts a zerolog logger and optional stdoutmetric.Option parameters
+func NewMetricExporter(logger zerolog.Logger, options ...stdoutmetric.Option) (*MetricExporter, error) {
 	// Create the stdoutmetric exporter with the provided options
 	exporter, err := stdoutmetric.New(options...)
 	if err != nil {
@@ -154,22 +153,22 @@ func (e *MetricExporter) Aggregation(k metric.InstrumentKind) metric.Aggregation
 }
 
 // Export exports metric data through the wrapped exporter
-// Also logs the metrics using the zap logger
+// Also logs the metrics using the zerolog logger
 func (e *MetricExporter) Export(ctx context.Context, data *metricdata.ResourceMetrics) error {
-	// Log the entire data structure as JSON
-	fields := []zap.Field{
-		zap.Any("length", data.Resource.Len()),
-	}
+	// Create a new log event
+	event := e.logger.Debug().Int("length", data.Resource.Len())
+
 	pid, ok := data.Resource.Set().Value(semconv.ProcessPIDKey)
 	if ok {
-		fields = append(fields, zap.String("pid", pid.Emit()))
-	}
-	executable, ok := data.Resource.Set().Value(semconv.ProcessExecutablePathKey)
-	if ok {
-		fields = append(fields, zap.String("executablePath", executable.Emit()))
+		event = event.Str("pid", pid.Emit())
 	}
 
-	e.logger.Debug("exporting metrics", fields...)
+	executable, ok := data.Resource.Set().Value(semconv.ProcessExecutablePathKey)
+	if ok {
+		event = event.Str("executablePath", executable.Emit())
+	}
+
+	event.Msg("exporting metrics")
 
 	return nil
 }

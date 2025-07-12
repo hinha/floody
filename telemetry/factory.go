@@ -3,8 +3,8 @@ package telemetry
 import (
 	"context"
 	"fmt"
-	"github.com/hinha/floody/log"
 	"github.com/hinha/floody/telemetry/builder"
+	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -13,8 +13,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"os"
+	"time"
 )
 
 const (
@@ -56,7 +56,8 @@ type IFactory interface {
 	Build(ctx context.Context, opts ...Option) ([]builder.CloseFunc, error)
 	StartTransaction(ctx context.Context, name string, options ...AppOption[metric.Meter, trace.Tracer]) (context.Context, trace.Span)
 	GetConfigs() *Options
-	GetLogger() *zap.Logger
+	GetLogger() zerolog.Logger
+	SetLogger(fn func() zerolog.LevelWriter)
 }
 
 type Options struct {
@@ -78,8 +79,10 @@ type Options struct {
 
 type Factory struct {
 	*Options
+
+	Logger     func() zerolog.LevelWriter
 	app        *Application[metric.Meter, trace.Tracer]
-	logger     *zap.Logger
+	logger     zerolog.Logger
 	attributes []attribute.KeyValue
 }
 
@@ -94,14 +97,24 @@ func NewFactory(options *Options) IFactory {
 	return &Factory{
 		Options: options,
 		app:     &Application[metric.Meter, trace.Tracer]{},
+		Logger: func() zerolog.LevelWriter {
+			return zerolog.MultiLevelWriter(zerolog.ConsoleWriter{
+				Out:        os.Stdout,
+				TimeFormat: time.RFC3339,
+			})
+		},
 	}
 }
 
-func (f *Factory) setupLogger() log.LoggerI {
-	return log.NewLogger(log.NewDevelopmentConfig())
+func (f *Factory) SetLogger(fn func() zerolog.LevelWriter) {
+	f.Logger = fn
 }
 
-func (f *Factory) GetLogger() *zap.Logger {
+func (f *Factory) setupLogger() zerolog.Logger {
+	return zerolog.New(f.Logger()).With().Timestamp().Caller().Logger()
+}
+
+func (f *Factory) GetLogger() zerolog.Logger {
 	return f.logger
 }
 
@@ -109,18 +122,12 @@ func (f *Factory) GetConfigs() *Options {
 	return f.Options
 }
 
-func (f *Factory) configureLogger() *zap.Logger {
+func (f *Factory) configureLogger() zerolog.Logger {
 	baseLogger := f.setupLogger()
+	logger := baseLogger.With().Str("main", LoggerNameTelemetry).Logger()
+	loggerWithExporter := logger.With().Str("exporter", LoggerNameExporter).Logger()
 
-	loggerOpts := []zap.Option{
-		zap.AddCaller(),
-		zap.AddStacktrace(zapcore.ErrorLevel),
-	}
-
-	return baseLogger.
-		WithOptions(loggerOpts...).
-		Named(LoggerNameTelemetry).
-		With(zap.String("exporter", LoggerNameExporter))
+	return loggerWithExporter
 }
 
 func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFunc, error) {
@@ -144,10 +151,12 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 			connectorMetric = builder.WithMeterGrpc(f.MeterConnector, f.readerOptions...)
 		}
 		meterProvider := builder.NewMeterProvider()
+		meterLogger := f.logger.With().Str("components", "meter").Logger()
+
 		obsMeter, meterCloser, err := meterProvider.
 			AddMetricOption(f.MeterOption...).
-			WithAttributes(f.attributes...).
-			WithLogger(f.logger.Named("meter\t")).
+			WithAttributes(f.Options.attributes...).
+			WithLogger(meterLogger).
 			WithServiceName(f.AppName).
 			Build(ctx, connectorMetric)
 		if err != nil {
@@ -156,10 +165,10 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 		closersFn = append(closersFn, meterCloser)
 
 		SetMetricTelemetry(obsMeter.Meter(f.AppName,
-			metric.WithInstrumentationVersion(f.Version), metric.WithInstrumentationAttributes(f.attributes...)))
+			metric.WithInstrumentationVersion(f.Version), metric.WithInstrumentationAttributes(f.Options.attributes...)))
 		f.app.setMeter(GetMetricTelemetry())
 		if err := f.app.observeMeter(obsMeter); err != nil {
-			f.logger.Error("failed to observe meter", zap.Error(err))
+			f.logger.Error().Err(err).Msg("failed to observe meter")
 		}
 	}
 
@@ -170,9 +179,12 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 		connectorTracer = builder.WithTraceGrpc(f.TraceConnector, f.processorOption...)
 	}
 	traceProvider := builder.NewTracerBuilder()
+	// Create a logger with trace component
+	traceLogger := f.logger.With().Str("components", "trace").Logger()
+
 	obsTrace, traceCloser, err := traceProvider.
-		WithLogger(f.logger.Named("trace\t")).
-		WithAttributes(f.attributes...).
+		WithLogger(traceLogger).
+		WithAttributes(f.Options.attributes...).
 		WithServiceName(f.AppName).
 		Build(ctx, connectorTracer)
 	if err != nil {
@@ -182,12 +194,10 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 
 	SetTraceTelemetry(obsTrace.Tracer(f.AppName,
 		trace.WithInstrumentationVersion(f.Version),
-		trace.WithInstrumentationAttributes(f.attributes...)))
+		trace.WithInstrumentationAttributes(f.Options.attributes...)))
 	f.app.setTracer(GetTraceTelemetry())
 
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-
-	f.logger.Info("telemetry factory build")
 	return closersFn, nil
 }
 
