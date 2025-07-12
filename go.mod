@@ -4,7 +4,6 @@ go 1.23.0
 
 require (
 	code.cloudfoundry.org/go-diodes v0.0.0-20250417050917-333c2580673b
-	github.com/joho/godotenv v1.5.1
 	github.com/rs/zerolog v1.34.0
 	github.com/shirou/gopsutil/v3 v3.24.5
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.60.0
