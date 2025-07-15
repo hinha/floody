@@ -25,8 +25,9 @@ type TracerConfig struct {
 
 // TracerBuilder implements the builder pattern for creating a tracer
 type TracerBuilder struct {
-	config TracerConfig
-	client *TraceConnector
+	config   TracerConfig
+	client   *TraceConnector
+	resource *resource.Resource
 }
 
 // NewTracerBuilder creates a new TracerBuilder instance
@@ -52,6 +53,12 @@ func (b *TracerBuilder) WithServiceName(serviceName string) *TracerBuilder {
 	return b
 }
 
+// WithResource sets the resource for the tracer
+func (b *TracerBuilder) WithResource(res *resource.Resource) *TracerBuilder {
+	b.resource = res
+	return b
+}
+
 // Build creates and returns the TracerProvider along with a cleanup function
 func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdktrace.TracerProvider, CloseFunc, error) {
 	if option == nil || len(option) == 0 {
@@ -69,21 +76,24 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 		attrs = append(attrs, semconv.ServiceNameKey.String(b.config.serviceName))
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithFromEnv(),
-		resource.WithHost(),
-		resource.WithHostID(),
-		resource.WithTelemetrySDK(),
-		resource.WithOS(),
-		resource.WithProcess(),
-		resource.WithContainer(),
-		resource.WithAttributes(attrs...),
-	)
-	if err != nil {
-		return nil, nil, err
+	if b.resource == nil {
+		res, err := resource.New(ctx,
+			resource.WithFromEnv(),
+			resource.WithHost(),
+			resource.WithHostID(),
+			resource.WithTelemetrySDK(),
+			resource.WithOS(),
+			resource.WithProcess(),
+			resource.WithContainer(),
+			resource.WithAttributes(attrs...),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		b.resource = res
 	}
 
-	err = b.client.spanExporter(ctx)
+	err := b.client.spanExporter(ctx)
 	if err != nil {
 		b.config.log.Error().Err(err).Msg("failed to create exporter")
 		return nil, nil, err
@@ -95,7 +105,7 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 	}
 
 	sampler := sdktrace.WithSampler(sdktrace.AlwaysSample())
-	rsc := sdktrace.WithResource(res)
+	rsc := sdktrace.WithResource(b.resource)
 
 	provider := b.client.mergeSpan(sampler, rsc)
 

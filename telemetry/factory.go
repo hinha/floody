@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
@@ -52,6 +53,12 @@ func WithMeterReaderOption(readers ...sdkmetric.PeriodicReaderOption) Option {
 	})
 }
 
+func WithNewResource(res *resource.Resource) Option {
+	return optionFunc(func(options *Options) {
+		options.resource = res
+	})
+}
+
 type IFactory interface {
 	Build(ctx context.Context, opts ...Option) ([]builder.CloseFunc, error)
 	StartTransaction(ctx context.Context, name string, options ...AppOption[metric.Meter, trace.Tracer]) (context.Context, trace.Span)
@@ -64,6 +71,7 @@ type Options struct {
 	readerOptions   []sdkmetric.PeriodicReaderOption
 	processorOption []sdktrace.BatchSpanProcessorOption
 	attributes      []attribute.KeyValue
+	resource        *resource.Resource
 
 	AppName     string
 	Version     string
@@ -184,6 +192,7 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 
 	obsTrace, traceCloser, err := traceProvider.
 		WithLogger(traceLogger).
+		WithResource(f.Options.resource).
 		WithAttributes(f.Options.attributes...).
 		WithServiceName(f.AppName).
 		Build(ctx, connectorTracer)
