@@ -7,6 +7,7 @@ import (
 	"github.com/hinha/floody/telemetry/builder"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"log"
 	"net/http"
@@ -43,11 +44,19 @@ func main() {
 		//HTTPRetry:           otlptracehttp.RetryConfig{},
 		//HTTPProxy:           nil,
 	}
+
+	// The exact sampler you should use depends on your specific needs,
+	// but in general you should make a decision at the start of a trace
+	// and allow the sampling decision to propagate to other services.
+	sampler := sdktrace.WithSampler(sdktrace.AlwaysSample())
+
 	provider := builder.NewTracerBuilder()
 	trace, closer, err := provider.WithAttributes(
 		semconv.ServiceNameKey.String("otel-go-demo"),
 		semconv.ServiceVersionKey.String("1.0.0"),
-		attribute.String("environment", "production")).Build(ctx, builder.WithTraceHttp(config))
+		attribute.String("environment", "production")).
+		WithProviderOption(sampler).
+		Build(ctx, builder.WithTraceHttp(config))
 	if err != nil {
 		panic(err)
 	}

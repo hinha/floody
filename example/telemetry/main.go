@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 	"log"
@@ -178,11 +179,13 @@ func main() {
 		})
 	})
 
+	sampler := sdktrace.WithSampler(sdktrace.TraceIDRatioBased(1.0)) // trace ratio 1.0 means all traces will be sampled
 	closers, err := otl.Build(ctx,
 		telemetry.WithAttribute(semconv.SessionIDKey.String("1234567890")),
 		telemetry.WithMeterReaderOption(
 			sdkmetric.WithInterval(time.Second*5),
 			sdkmetric.WithTimeout(30*time.Second)),
+		telemetry.WithTraceProviderOption(sampler),
 	)
 
 	log := otl.GetLogger()
