@@ -202,6 +202,7 @@ func (f *Factory) Build(ctx context.Context, opts ...Option) ([]builder.CloseFun
 		WithResource(f.Options.resource).
 		WithAttributes(f.Options.attributes...).
 		WithServiceName(f.AppName).
+		WithProviderOption(f.traceProviderOptions...).
 		Build(ctx, connectorTracer)
 	if err != nil {
 		return nil, err
