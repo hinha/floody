@@ -25,9 +25,10 @@ type TracerConfig struct {
 
 // TracerBuilder implements the builder pattern for creating a tracer
 type TracerBuilder struct {
-	config   TracerConfig
-	client   *TraceConnector
-	resource *resource.Resource
+	config          TracerConfig
+	client          *TraceConnector
+	resource        *resource.Resource
+	providerOptions []sdktrace.TracerProviderOption
 }
 
 // NewTracerBuilder creates a new TracerBuilder instance
@@ -56,6 +57,11 @@ func (b *TracerBuilder) WithServiceName(serviceName string) *TracerBuilder {
 // WithResource sets the resource for the tracer
 func (b *TracerBuilder) WithResource(res *resource.Resource) *TracerBuilder {
 	b.resource = res
+	return b
+}
+
+func (b *TracerBuilder) WithProviderOption(tpo ...sdktrace.TracerProviderOption) *TracerBuilder {
+	b.providerOptions = tpo
 	return b
 }
 
@@ -104,10 +110,9 @@ func (b *TracerBuilder) Build(ctx context.Context, option ...TraceOption) (*sdkt
 		return nil, nil, err
 	}
 
-	sampler := sdktrace.WithSampler(sdktrace.AlwaysSample())
-	rsc := sdktrace.WithResource(b.resource)
+	b.providerOptions = append(b.providerOptions, sdktrace.WithResource(b.resource))
 
-	provider := b.client.mergeSpan(sampler, rsc)
+	provider := b.client.mergeSpan(b.providerOptions...)
 
 	// Set global TracerProvider
 	otel.SetTracerProvider(provider)

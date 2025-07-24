@@ -59,6 +59,12 @@ func WithNewResource(res *resource.Resource) Option {
 	})
 }
 
+func WithTraceProviderOption(tpo ...sdktrace.TracerProviderOption) Option {
+	return optionFunc(func(options *Options) {
+		options.traceProviderOptions = tpo
+	})
+}
+
 type IFactory interface {
 	Build(ctx context.Context, opts ...Option) ([]builder.CloseFunc, error)
 	StartTransaction(ctx context.Context, name string, options ...AppOption[metric.Meter, trace.Tracer]) (context.Context, trace.Span)
@@ -68,10 +74,11 @@ type IFactory interface {
 }
 
 type Options struct {
-	readerOptions   []sdkmetric.PeriodicReaderOption
-	processorOption []sdktrace.BatchSpanProcessorOption
-	attributes      []attribute.KeyValue
-	resource        *resource.Resource
+	readerOptions        []sdkmetric.PeriodicReaderOption
+	processorOption      []sdktrace.BatchSpanProcessorOption
+	traceProviderOptions []sdktrace.TracerProviderOption
+	attributes           []attribute.KeyValue
+	resource             *resource.Resource
 
 	AppName     string
 	Version     string
